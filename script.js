@@ -8,6 +8,8 @@
 const ENDPOINTS = {
   // Kendi Google Apps Script endpoint URL'nizi buraya yapıştırın
   contact: 'https://script.google.com/macros/s/AKfycbxtk9Nalnsa3FKhZw5z-zmt_eYYmwKs_dw1i0m_6WNBKaVwoUk8k9qQQCaQ2zLAFSrB/exec',
+  // Blog Apps Script endpoint URL'nizi buraya yapıştırın (blog-gas.js dosyasını deploy edin)
+  blog: 'https://script.google.com/macros/s/AKfycbxugCTSEa6-rXQAStyyOyKXhPLaoMbsVgs0hYk8iVk3fD_vFHB_Xymxx5I9VB5O7A0/exec',
 };
 
 // ─── DOM Ready ────────────────────────────────────────────────
@@ -22,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initRangeSliders();
   initContactForm();
   initSpotifyToggle();
+  initBlog();
 });
 
 // ─── 1. Navbar Scroll Effect ──────────────────────────────────
@@ -546,4 +549,861 @@ function initSpotifyToggle() {
     embed.style.display = isVisible ? 'none' : 'block';
     btn.textContent = isVisible ? 'Çalma Listesini Göster' : 'Gizle';
   });
+}
+
+// ─── 14. Blog System ──────────────────────────────────────────
+const blogState = {
+  posts: [],
+  currentPost: null,
+  editingPost: null,
+  isAdmin: false,
+  password: '',
+  view: 'listing',
+};
+
+function initBlog() {
+  const saved = sessionStorage.getItem('blogAdmin');
+  if (saved) {
+    blogState.isAdmin = true;
+    blogState.password = saved;
+    updateAdminUI();
+  }
+
+  initBlogToolbar();
+
+  // Cover image drag & drop
+  const coverEl = document.getElementById('blogEditorCover');
+  if (coverEl) {
+    coverEl.addEventListener('dragover', (e) => { e.preventDefault(); coverEl.classList.add('drag-over'); });
+    coverEl.addEventListener('dragleave', () => coverEl.classList.remove('drag-over'));
+    coverEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      coverEl.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) handleCoverImage(file);
+    });
+  }
+
+  // Editor content drag & drop + paste for images
+  const editorContent = document.getElementById('blogEditorContent');
+  if (editorContent) {
+    editorContent.addEventListener('dragover', (e) => e.preventDefault());
+    editorContent.addEventListener('drop', (e) => {
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        e.preventDefault();
+        insertImageToEditor(file);
+      }
+    });
+    editorContent.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) insertImageToEditor(file);
+          return;
+        }
+      }
+    });
+  }
+
+  fetchBlogPosts();
+}
+
+// ─── Blog: Fetch & Render ─────────────────────────────────────
+function fetchBlogPosts() {
+  const grid = document.getElementById('blogGrid');
+  const empty = document.getElementById('blogEmpty');
+  const loading = document.getElementById('blogLoading');
+
+  let url = ENDPOINTS.blog + '?action=list';
+  if (blogState.isAdmin) {
+    url += '&admin=true&pw=' + encodeURIComponent(blogState.password);
+  }
+
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      if (loading) loading.style.display = 'none';
+      if (data.success) {
+        blogState.posts = data.posts;
+        renderBlogListing();
+      } else {
+        if (empty) { empty.style.display = 'block'; empty.querySelector('p').textContent = 'Yazılar yüklenirken hata oluştu.'; }
+      }
+    })
+    .catch(() => {
+      if (loading) loading.style.display = 'none';
+      if (empty) { empty.style.display = 'block'; empty.querySelector('p').textContent = 'Blog bağlantısı kurulamadı.'; }
+    });
+}
+
+function renderBlogListing() {
+  const grid = document.getElementById('blogGrid');
+  const empty = document.getElementById('blogEmpty');
+  if (!grid) return;
+
+  if (blogState.posts.length === 0) {
+    grid.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+
+  grid.innerHTML = blogState.posts.map(post => {
+    const date = post.createdAt ? new Date(post.createdAt).toLocaleDateString('tr-TR', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+    const isDraft = post.status === 'draft';
+    const coverHtml = post.coverImage
+      ? `<img class="blog-card-image" src="${escapeAttr(post.coverImage)}" alt="${escapeAttr(post.title)}" loading="lazy">`
+      : `<div class="blog-card-image-placeholder">Blog</div>`;
+
+    return `
+      <div class="blog-card ${isDraft ? 'blog-card-draft' : ''}" onclick="showBlogPost('${escapeAttr(post.id)}')">
+        ${coverHtml}
+        <div class="blog-card-body">
+          <div class="blog-card-category">${isDraft ? 'Taslak · ' : ''}${escapeHtml(post.category || 'Genel')}</div>
+          <h3 class="blog-card-title">${escapeHtml(post.title)}</h3>
+          <p class="blog-card-excerpt">${escapeHtml(post.excerpt || '')}</p>
+          <div class="blog-card-date">${escapeHtml(post.author || 'UGT')} · ${date}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ─── Blog: Post Detail ────────────────────────────────────────
+function showBlogPost(id) {
+  fetch(ENDPOINTS.blog + '?action=get&id=' + encodeURIComponent(id))
+    .then(r => r.json())
+    .then(data => {
+      if (!data.success || !data.post) return;
+      blogState.currentPost = data.post;
+      renderBlogDetail(data.post);
+      setBlogView('detail');
+    });
+}
+
+function renderBlogDetail(post) {
+  const coverEl = document.getElementById('blogDetailCover');
+  const catEl = document.getElementById('blogDetailCategory');
+  const titleEl = document.getElementById('blogDetailTitle');
+  const authorEl = document.getElementById('blogDetailAuthor');
+  const dateEl = document.getElementById('blogDetailDate');
+  const contentEl = document.getElementById('blogDetailContent');
+  const actionsEl = document.getElementById('blogDetailActions');
+
+  if (post.coverImage) {
+    coverEl.innerHTML = `<img src="${escapeAttr(post.coverImage)}" alt="${escapeAttr(post.title)}">`;
+    coverEl.style.display = 'block';
+  } else {
+    coverEl.style.display = 'none';
+  }
+
+  catEl.textContent = post.category || 'Genel';
+  titleEl.textContent = post.title;
+  authorEl.textContent = post.author || 'UGT';
+  dateEl.textContent = post.createdAt ? new Date(post.createdAt).toLocaleDateString('tr-TR', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+
+  contentEl.innerHTML = sanitizeBlogHtml(post.content || '');
+  contentEl.querySelectorAll('a').forEach(a => {
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener');
+  });
+
+  if (actionsEl) actionsEl.style.display = blogState.isAdmin ? 'flex' : 'none';
+}
+
+// ─── Blog: View Management ────────────────────────────────────
+window.setBlogView = function(view) {
+  blogState.view = view;
+  const listing = document.getElementById('blogListing');
+  const detail = document.getElementById('blogDetail');
+  const editor = document.getElementById('blogEditor');
+  const header = document.getElementById('blogHeader');
+
+  if (listing) listing.style.display = view === 'listing' ? '' : 'none';
+  if (detail) detail.style.display = view === 'detail' ? '' : 'none';
+  if (editor) editor.style.display = view === 'editor' ? '' : 'none';
+  if (header) header.style.display = view === 'listing' ? '' : 'none';
+
+  window.scrollTo(0, 0);
+};
+
+// ─── Blog: Admin Auth ─────────────────────────────────────────
+window.blogShowLogin = function() {
+  if (blogState.isAdmin) {
+    showBlogEditor();
+    return;
+  }
+  document.getElementById('blogLoginOverlay').style.display = 'flex';
+  document.getElementById('blogLoginPassword').value = '';
+  document.getElementById('blogLoginError').textContent = '';
+  document.getElementById('blogLoginPassword').focus();
+};
+
+window.blogHideLogin = function() {
+  document.getElementById('blogLoginOverlay').style.display = 'none';
+};
+
+window.blogLogin = function() {
+  const pw = document.getElementById('blogLoginPassword').value;
+  if (!pw) {
+    document.getElementById('blogLoginError').textContent = 'Şifre gerekli.';
+    return;
+  }
+
+  fetch(ENDPOINTS.blog, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'checkAuth', password: pw }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      blogState.isAdmin = true;
+      blogState.password = pw;
+      sessionStorage.setItem('blogAdmin', pw);
+      blogHideLogin();
+      updateAdminUI();
+      fetchBlogPosts();
+    } else {
+      document.getElementById('blogLoginError').textContent = 'Şifre hatalı.';
+    }
+  })
+  .catch(() => {
+    document.getElementById('blogLoginError').textContent = 'Bağlantı hatası.';
+  });
+};
+
+function blogAdminLogout() {
+  blogState.isAdmin = false;
+  blogState.password = '';
+  sessionStorage.removeItem('blogAdmin');
+  updateAdminUI();
+  fetchBlogPosts();
+}
+
+function updateAdminUI() {
+  const btn = document.getElementById('blogAdminBtn');
+  if (!btn) return;
+
+  if (blogState.isAdmin) {
+    btn.textContent = '+ Yeni Yazı';
+    btn.onclick = () => showBlogEditor();
+    if (!document.getElementById('blogLogoutBtn')) {
+      const logoutBtn = document.createElement('button');
+      logoutBtn.id = 'blogLogoutBtn';
+      logoutBtn.className = 'btn btn-secondary btn-sm';
+      logoutBtn.textContent = 'Çıkış';
+      logoutBtn.style.marginLeft = '8px';
+      logoutBtn.onclick = blogAdminLogout;
+      btn.parentElement.appendChild(logoutBtn);
+    }
+  } else {
+    btn.textContent = 'Yönetim';
+    btn.onclick = blogShowLogin;
+    const logoutBtn = document.getElementById('blogLogoutBtn');
+    if (logoutBtn) logoutBtn.remove();
+  }
+}
+
+// ─── Blog: Editor ─────────────────────────────────────────────
+function showBlogEditor(post) {
+  blogState.editingPost = post || null;
+
+  const titleEl = document.getElementById('blogEditorTitle');
+  const categoryEl = document.getElementById('blogEditorCategory');
+  const authorEl = document.getElementById('blogEditorAuthor');
+  const excerptEl = document.getElementById('blogEditorExcerpt');
+  const contentEl = document.getElementById('blogEditorContent');
+  const coverPreview = document.getElementById('blogEditorCoverPreview');
+  const coverPlaceholder = document.getElementById('blogEditorCoverPlaceholder');
+
+  if (post) {
+    titleEl.value = post.title || '';
+    categoryEl.value = post.category || 'Genel';
+    authorEl.value = post.author || 'UGT';
+    excerptEl.value = post.excerpt || '';
+    contentEl.innerHTML = post.content || '';
+    if (post.coverImage) {
+      coverPreview.innerHTML = `<img src="${escapeAttr(post.coverImage)}"><button class="blog-editor-cover-remove" onclick="event.stopPropagation();removeCoverImage()">✕</button>`;
+      coverPreview.style.display = 'block';
+      coverPlaceholder.style.display = 'none';
+      coverPreview.dataset.url = post.coverImage;
+    } else {
+      coverPreview.style.display = 'none';
+      coverPlaceholder.style.display = 'flex';
+      coverPreview.dataset.url = '';
+    }
+  } else {
+    titleEl.value = '';
+    categoryEl.value = 'Haber';
+    authorEl.value = 'UGT';
+    excerptEl.value = '';
+    contentEl.innerHTML = '';
+    coverPreview.style.display = 'none';
+    coverPlaceholder.style.display = 'flex';
+    coverPreview.dataset.url = '';
+  }
+
+  setBlogView('editor');
+  titleEl.focus();
+  updateWordCount();
+}
+
+window.blogEditorBack = function() {
+  if (blogState.editingPost) {
+    showBlogPost(blogState.editingPost.id);
+  } else {
+    setBlogView('listing');
+  }
+};
+
+window.blogEditCurrent = function() {
+  if (blogState.currentPost) showBlogEditor(blogState.currentPost);
+};
+
+window.blogDeleteCurrent = function() {
+  if (!blogState.currentPost) return;
+  if (!confirm('Bu yazıyı silmek istediğinize emin misiniz?')) return;
+
+  fetch(ENDPOINTS.blog, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'delete', id: blogState.currentPost.id, password: blogState.password }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      blogState.currentPost = null;
+      setBlogView('listing');
+      fetchBlogPosts();
+    } else {
+      alert('Silme hatası: ' + (data.error || ''));
+    }
+  })
+  .catch(() => alert('Bağlantı hatası'));
+};
+
+// ─── Blog: Save Post ──────────────────────────────────────────
+window.saveBlogPost = function(status) {
+  const title = document.getElementById('blogEditorTitle').value.trim();
+  const category = document.getElementById('blogEditorCategory').value;
+  const author = document.getElementById('blogEditorAuthor').value.trim();
+  const excerpt = document.getElementById('blogEditorExcerpt').value.trim();
+  const content = document.getElementById('blogEditorContent').innerHTML;
+  const coverImage = document.getElementById('blogEditorCoverPreview').dataset.url || '';
+
+  if (!title) {
+    alert('Başlık gerekli.');
+    document.getElementById('blogEditorTitle').focus();
+    return;
+  }
+
+  const data = {
+    action: blogState.editingPost ? 'update' : 'create',
+    password: blogState.password,
+    title, excerpt: excerpt || title.substring(0, 150), content, category, coverImage,
+    author: author || 'UGT', status,
+  };
+  if (blogState.editingPost) data.id = blogState.editingPost.id;
+
+  const btns = document.querySelectorAll('.blog-editor-topbar-actions button');
+  btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+
+  fetch(ENDPOINTS.blog, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(data),
+  })
+  .then(r => r.json())
+  .then(res => {
+    btns.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+    if (res.success) { setBlogView('listing'); fetchBlogPosts(); }
+    else alert('Kaydetme hatası: ' + (res.error || ''));
+  })
+  .catch(() => {
+    btns.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+    alert('Bağlantı hatası');
+  });
+};
+
+// ─── Blog: Image Upload ───────────────────────────────────────
+function uploadImageToServer(file) {
+  return new Promise((resolve, reject) => {
+    resizeImage(file, 1200, (base64, mimeType) => {
+      fetch(ENDPOINTS.blog, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'upload', password: blogState.password,
+          imageData: base64, mimeType, fileName: file.name,
+        }),
+      })
+      .then(r => r.json())
+      .then(data => data.success ? resolve(data.url) : reject(new Error(data.error)))
+      .catch(reject);
+    });
+  });
+}
+
+function resizeImage(file, maxWidth, callback) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let w = img.width, h = img.height;
+      if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth; }
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      const mimeType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      const dataUrl = canvas.toDataURL(mimeType, mimeType === 'image/png' ? 1 : 0.85);
+      callback(dataUrl.split(',')[1], mimeType);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+window.handleCoverImageSelect = function(e) {
+  const file = e.target.files[0];
+  if (file) handleCoverImage(file);
+};
+
+function handleCoverImage(file) {
+  const preview = document.getElementById('blogEditorCoverPreview');
+  const placeholder = document.getElementById('blogEditorCoverPlaceholder');
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    preview.innerHTML = `<img src="${e.target.result}"><div class="blog-editor-cover-uploading">Yükleniyor...</div>`;
+    preview.style.display = 'block';
+    placeholder.style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+
+  uploadImageToServer(file)
+    .then(url => {
+      preview.dataset.url = url;
+      preview.innerHTML = `<img src="${url}"><button class="blog-editor-cover-remove" onclick="event.stopPropagation();removeCoverImage()">✕</button>`;
+    })
+    .catch(() => {
+      preview.innerHTML += '<div class="blog-editor-cover-error">Yükleme hatası</div>';
+    });
+}
+
+window.removeCoverImage = function() {
+  const preview = document.getElementById('blogEditorCoverPreview');
+  const placeholder = document.getElementById('blogEditorCoverPlaceholder');
+  preview.style.display = 'none';
+  preview.dataset.url = '';
+  preview.innerHTML = '';
+  placeholder.style.display = 'flex';
+  document.getElementById('coverImageInput').value = '';
+};
+
+function insertImageToEditor(file) {
+  const editorContent = document.getElementById('blogEditorContent');
+  const placeholder = document.createElement('div');
+  placeholder.className = 'blog-img-uploading';
+  placeholder.textContent = 'Görsel yükleniyor...';
+
+  const sel = window.getSelection();
+  if (sel.rangeCount && editorContent.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(placeholder);
+  } else {
+    editorContent.appendChild(placeholder);
+  }
+
+  uploadImageToServer(file)
+    .then(url => {
+      const figure = document.createElement('figure');
+      figure.className = 'blog-content-image';
+      figure.contentEditable = 'false';
+      figure.innerHTML = `<img src="${url}" alt="">` +
+        `<div class="blog-image-actions">` +
+        `<button class="blog-image-action-btn delete" title="Görseli Sil" onclick="this.closest('figure').nextElementSibling||this.closest('figure').parentNode.appendChild(document.createElement('p'));this.closest('figure').remove()">` +
+        `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>` +
+        `<figcaption contenteditable="true" data-placeholder="Açıklama ekle..."></figcaption>`;
+      placeholder.replaceWith(figure);
+      // Ensure there's a paragraph after the figure for continued typing
+      if (!figure.nextElementSibling) {
+        const p = document.createElement('p');
+        p.innerHTML = '<br>';
+        figure.parentNode.insertBefore(p, figure.nextSibling);
+      }
+    })
+    .catch(() => {
+      placeholder.textContent = 'Görsel yüklenemedi';
+      placeholder.classList.add('blog-img-error');
+    });
+}
+
+// ─── Blog: Word Count ────────────────────────────────────────
+function updateWordCount() {
+  const content = document.getElementById('blogEditorContent');
+  if (!content) return;
+  const text = content.innerText || '';
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const chars = text.replace(/\s/g, '').length;
+  const wordEl = document.getElementById('blogWordCount');
+  const charEl = document.getElementById('blogCharCount');
+  if (wordEl) wordEl.textContent = words;
+  if (charEl) charEl.textContent = chars;
+}
+
+// ─── Blog: Floating Toolbar ──────────────────────────────────
+let blogSavedRange = null;
+
+function saveCursorRange() {
+  const sel = window.getSelection();
+  if (sel.rangeCount) blogSavedRange = sel.getRangeAt(0).cloneRange();
+}
+
+function restoreCursorRange() {
+  if (blogSavedRange) {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(blogSavedRange);
+  }
+}
+
+function initBlogToolbar() {
+  const toolbar = document.getElementById('blogToolbar');
+  const editorContent = document.getElementById('blogEditorContent');
+  const linkPopover = document.getElementById('blogLinkPopover');
+  const linkInput = document.getElementById('blogLinkInput');
+  const embedPopover = document.getElementById('blogEmbedPopover');
+  const embedInput = document.getElementById('blogEmbedInput');
+  const insertMenu = document.getElementById('blogInsertMenu');
+  const insertToggle = document.getElementById('blogInsertToggle');
+  const insertOptions = document.getElementById('blogInsertOptions');
+
+  if (!toolbar || !editorContent) return;
+
+  // ── Floating toolbar button actions ──
+  toolbar.querySelectorAll('.blog-toolbar-btn').forEach(btn => {
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const cmd = btn.dataset.cmd;
+      const val = btn.dataset.val;
+
+      if (cmd === 'createLink') {
+        saveCursorRange();
+        toolbar.style.display = 'none';
+        const rect = toolbar.getBoundingClientRect();
+        linkPopover.style.left = rect.left + 'px';
+        linkPopover.style.top = (rect.top + window.scrollY) + 'px';
+        linkPopover.style.display = 'flex';
+        linkInput.value = '';
+        linkInput.focus();
+      } else if (cmd === 'formatBlock') {
+        const block = getParentBlock();
+        document.execCommand('formatBlock', false, (block && block.tagName === val) ? 'P' : val);
+      } else {
+        document.execCommand(cmd, false, val || null);
+      }
+    });
+  });
+
+  // ── Link popover actions ──
+  function applyLink() {
+    const url = linkInput.value.trim();
+    if (url) {
+      restoreCursorRange();
+      document.execCommand('createLink', false, url);
+      // Make link open in new tab
+      const sel = window.getSelection();
+      if (sel.rangeCount) {
+        let node = sel.anchorNode;
+        while (node && node.tagName !== 'A') node = node.parentNode;
+        if (node && node.tagName === 'A') {
+          node.setAttribute('target', '_blank');
+          node.setAttribute('rel', 'noopener noreferrer');
+        }
+      }
+    }
+    linkPopover.style.display = 'none';
+  }
+
+  document.getElementById('blogLinkConfirm').addEventListener('click', applyLink);
+  document.getElementById('blogLinkCancel').addEventListener('click', () => {
+    linkPopover.style.display = 'none';
+  });
+  linkInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
+    if (e.key === 'Escape') linkPopover.style.display = 'none';
+  });
+
+  // ── Embed popover actions ──
+  function applyEmbed() {
+    const url = embedInput.value.trim();
+    if (url) {
+      restoreCursorRange();
+      // Check for YouTube
+      const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/);
+      // Check for Vimeo
+      const vimeoMatch = url.match(/vimeo\.com\/(\d+)/);
+
+      if (ytMatch) {
+        insertVideoEmbed('youtube', ytMatch[1]);
+      } else if (vimeoMatch) {
+        insertVideoEmbed('vimeo', vimeoMatch[1]);
+      } else {
+        insertLinkCard(url);
+      }
+    }
+    embedPopover.style.display = 'none';
+  }
+
+  document.getElementById('blogEmbedConfirm').addEventListener('click', applyEmbed);
+  document.getElementById('blogEmbedCancel').addEventListener('click', () => {
+    embedPopover.style.display = 'none';
+  });
+  embedInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyEmbed(); }
+    if (e.key === 'Escape') embedPopover.style.display = 'none';
+  });
+
+  // ── Selection change → show/hide toolbar ──
+  document.addEventListener('selectionchange', () => {
+    if (blogState.view !== 'editor') return;
+    const sel = window.getSelection();
+    if (!sel.rangeCount || sel.isCollapsed || !editorContent.contains(sel.anchorNode)) {
+      toolbar.style.display = 'none';
+      updateInsertMenu();
+      return;
+    }
+
+    // Show toolbar above selection
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    toolbar.style.display = 'flex';
+    const toolbarRect = toolbar.getBoundingClientRect();
+    toolbar.style.left = Math.max(8, rect.left + rect.width / 2 - toolbarRect.width / 2) + 'px';
+    toolbar.style.top = (rect.top - toolbarRect.height - 10 + window.scrollY) + 'px';
+
+    // Update active states
+    toolbar.querySelectorAll('.blog-toolbar-btn').forEach(btn => {
+      const cmd = btn.dataset.cmd;
+      if (['bold', 'italic', 'underline', 'strikeThrough', 'insertUnorderedList', 'insertOrderedList'].includes(cmd)) {
+        btn.classList.toggle('active', document.queryCommandState(cmd));
+      } else if (cmd === 'formatBlock') {
+        const block = getParentBlock();
+        btn.classList.toggle('active', block && block.tagName === btn.dataset.val);
+      }
+    });
+
+    // Hide insert menu when selecting text
+    if (insertMenu) insertMenu.style.display = 'none';
+  });
+
+  // ── Click outside to close toolbar/popovers ──
+  document.addEventListener('mousedown', (e) => {
+    if (!toolbar.contains(e.target) && !editorContent.contains(e.target)) toolbar.style.display = 'none';
+    if (linkPopover && !linkPopover.contains(e.target)) linkPopover.style.display = 'none';
+    if (embedPopover && !embedPopover.contains(e.target)) embedPopover.style.display = 'none';
+    if (insertOptions && !insertMenu.contains(e.target)) {
+      insertOptions.style.display = 'none';
+      insertToggle.classList.remove('open');
+    }
+  });
+
+  // ── Keyboard shortcuts ──
+  editorContent.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === 'b') { e.preventDefault(); document.execCommand('bold'); }
+      if (e.key === 'i') { e.preventDefault(); document.execCommand('italic'); }
+      if (e.key === 'u') { e.preventDefault(); document.execCommand('underline'); }
+      if (e.key === 'k') {
+        e.preventDefault();
+        saveCursorRange();
+        const sel = window.getSelection();
+        if (sel.rangeCount) {
+          const rect = sel.getRangeAt(0).getBoundingClientRect();
+          linkPopover.style.left = Math.max(8, rect.left) + 'px';
+          linkPopover.style.top = (rect.top - 50 + window.scrollY) + 'px';
+          linkPopover.style.display = 'flex';
+          linkInput.value = '';
+          linkInput.focus();
+        }
+      }
+    }
+  });
+
+  // ── Word count updates ──
+  editorContent.addEventListener('input', updateWordCount);
+  updateWordCount();
+
+  // ── Side "+" Insert Menu ──
+  function updateInsertMenu() {
+    if (!insertMenu || blogState.view !== 'editor') {
+      if (insertMenu) insertMenu.style.display = 'none';
+      return;
+    }
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed || !editorContent.contains(sel.anchorNode)) {
+      insertMenu.style.display = 'none';
+      return;
+    }
+
+    // Check if cursor is on an empty line
+    let block = sel.anchorNode;
+    if (block.nodeType === 3) block = block.parentNode;
+    while (block && block !== editorContent && !['P','DIV','H1','H2','H3','H4','BLOCKQUOTE','LI','PRE'].includes(block.tagName)) {
+      block = block.parentNode;
+    }
+
+    const isEmpty = block && block !== editorContent && (block.textContent.trim() === '' || block.innerHTML === '<br>');
+
+    if (isEmpty) {
+      const rect = block.getBoundingClientRect();
+      const wrapRect = editorContent.closest('.blog-editor-wrap').getBoundingClientRect();
+      insertMenu.style.display = 'flex';
+      insertMenu.style.left = (wrapRect.left - 44) + 'px';
+      insertMenu.style.top = (rect.top + window.scrollY + rect.height / 2 - 16) + 'px';
+    } else {
+      insertMenu.style.display = 'none';
+      insertOptions.style.display = 'none';
+      insertToggle.classList.remove('open');
+    }
+  }
+
+  // Update insert menu on caret move
+  editorContent.addEventListener('keyup', updateInsertMenu);
+  editorContent.addEventListener('click', updateInsertMenu);
+
+  // Toggle insert options
+  insertToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = insertOptions.style.display === 'flex';
+    insertOptions.style.display = isOpen ? 'none' : 'flex';
+    insertToggle.classList.toggle('open', !isOpen);
+  });
+
+  // Insert option handlers
+  document.querySelectorAll('.blog-insert-option').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const type = btn.dataset.insert;
+      insertOptions.style.display = 'none';
+      insertToggle.classList.remove('open');
+      insertMenu.style.display = 'none';
+
+      editorContent.focus();
+
+      if (type === 'image') {
+        const input = document.createElement('input');
+        input.type = 'file'; input.accept = 'image/*';
+        input.onchange = () => { if (input.files[0]) insertImageToEditor(input.files[0]); };
+        input.click();
+      } else if (type === 'video' || type === 'link') {
+        saveCursorRange();
+        const rect = editorContent.getBoundingClientRect();
+        embedPopover.style.left = (rect.left + rect.width / 2 - 210) + 'px';
+        embedPopover.style.top = (insertMenu.getBoundingClientRect().top + window.scrollY) + 'px';
+        embedPopover.style.display = 'block';
+        embedInput.value = '';
+        embedInput.placeholder = type === 'video'
+          ? 'YouTube veya Vimeo URL yapıştırın...'
+          : 'Bağlantı URL yapıştırın...';
+        embedInput.focus();
+        // Tag embed type for handler
+        embedPopover.dataset.insertType = type;
+      } else if (type === 'divider') {
+        document.execCommand('insertHTML', false, '<hr><p><br></p>');
+      } else if (type === 'code') {
+        document.execCommand('formatBlock', false, 'PRE');
+      }
+    });
+  });
+}
+
+function getParentBlock() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return null;
+  let node = sel.anchorNode;
+  while (node && node !== document.getElementById('blogEditorContent')) {
+    if (node.nodeType === 1 && /^(H[1-6]|P|BLOCKQUOTE|DIV|LI|UL|OL|PRE)$/.test(node.tagName)) return node;
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function insertVideoEmbed(platform, id) {
+  let src = '';
+  if (platform === 'youtube') src = `https://www.youtube.com/embed/${id}`;
+  else if (platform === 'vimeo') src = `https://player.vimeo.com/video/${id}`;
+
+  document.execCommand('insertHTML', false,
+    `<div class="blog-youtube-embed"><iframe src="${src}" frameborder="0" allowfullscreen></iframe></div><p><br></p>`);
+}
+
+function insertYoutubeEmbed(url) {
+  const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/);
+  if (!match) { alert('Geçerli bir YouTube URL\'si girin.'); return; }
+  insertVideoEmbed('youtube', match[1]);
+}
+
+function insertLinkCard(url) {
+  try {
+    const hostname = new URL(url).hostname;
+    const html = `<div class="blog-link-card" contenteditable="false">` +
+      `<div class="blog-link-card-body">` +
+      `<div class="blog-link-card-title">${escapeHtml(url)}</div>` +
+      `<div class="blog-link-card-url">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>` +
+      `<span>${escapeHtml(hostname)}</span></div></div></div><p><br></p>`;
+    document.execCommand('insertHTML', false, html);
+  } catch {
+    document.execCommand('createLink', false, url);
+  }
+}
+
+// ─── Blog: HTML Sanitization ──────────────────────────────────
+function sanitizeBlogHtml(html) {
+  const allowed = ['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','A','H1','H2','H3','H4','BLOCKQUOTE','UL','OL','LI','IMG','FIGURE','FIGCAPTION','DIV','SPAN','IFRAME','PRE','CODE','HR','SVG','PATH','LINE','POLYLINE','CIRCLE','RECT','TEXT','BUTTON'];
+  const allowedAttrs = ['href','src','alt','class','target','rel','frameborder','allowfullscreen','data-placeholder','contenteditable','title','onclick','viewBox','width','height','fill','stroke','stroke-width','stroke-linecap','d','x1','y1','x2','y2','points','cx','cy','r','x','y','font-size','font-weight','font-family'];
+
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  function cleanNode(node) {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === 1) {
+        if (!allowed.includes(child.tagName)) {
+          while (child.firstChild) node.insertBefore(child.firstChild, child);
+          node.removeChild(child);
+        } else {
+          for (const attr of Array.from(child.attributes)) {
+            if (!allowedAttrs.includes(attr.name)) child.removeAttribute(attr.name);
+          }
+          if (child.hasAttribute('href') && child.getAttribute('href').toLowerCase().trim().startsWith('javascript')) child.removeAttribute('href');
+          if (child.hasAttribute('src') && child.getAttribute('src').toLowerCase().trim().startsWith('javascript')) child.removeAttribute('src');
+          cleanNode(child);
+        }
+      }
+    }
+  }
+
+  cleanNode(div);
+  return div.innerHTML;
+}
+
+// ─── Blog: Utility ────────────────────────────────────────────
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
