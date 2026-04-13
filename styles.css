@@ -2328,6 +2328,108 @@ input.error-field, textarea.error-field, select.error-field {
   50% { opacity: 0.6; }
 }
 
+/* ---------- Audio Embed ---------- */
+.blog-audio-uploading {
+  padding: 32px;
+  text-align: center;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  margin: 1em 0;
+  border: 2px dashed var(--orange);
+  animation: pulse-bg 1.5s ease-in-out infinite;
+}
+.blog-audio-error {
+  border-color: var(--error);
+  color: var(--error);
+  animation: none;
+}
+.blog-audio-embed {
+  margin: 1.2em 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.blog-audio-player {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  position: relative;
+}
+.blog-audio-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--orange);
+  border-radius: 50%;
+  color: #fff;
+}
+.blog-audio-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.blog-audio-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.blog-audio-info audio {
+  width: 100%;
+  height: 36px;
+  border-radius: 8px;
+}
+.blog-audio-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0,0,0,0.5);
+  border: none;
+  color: #fff;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.blog-audio-player:hover .blog-audio-remove {
+  opacity: 1;
+}
+
+/* ---------- Login Cooldown ---------- */
+.blog-login-cooldown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 107, 53, 0.1);
+  border: 1px solid rgba(255, 107, 53, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--orange);
+  font-size: 0.85rem;
+  font-weight: 500;
+  animation: pulse-bg 2s ease-in-out infinite;
+}
+.blog-login-cooldown svg {
+  flex-shrink: 0;
+}
+
 /* ---------- Word Count ---------- */
 .blog-editor-word-count {
   padding: 16px 0;

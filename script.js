@@ -505,6 +505,7 @@ function initContactForm() {
     if (!nameEl.value.trim()) { showFieldError(nameEl, 'Ad soyad gereklidir.'); valid = false; }
     if (!emailEl.value.trim()) { showFieldError(emailEl, 'E-posta gereklidir.'); valid = false; }
     else if (!isValidEmail(emailEl.value.trim())) { showFieldError(emailEl, 'Geçerli bir e-posta girin.'); valid = false; }
+    else if (!emailEl.value.trim().endsWith('@metu.edu.tr')) { showFieldError(emailEl, 'Lütfen ODTÜ e-posta adresinizi kullanın (@metu.edu.tr).'); valid = false; }
     if (!messageEl.value.trim()) { showFieldError(messageEl, 'Mesaj gereklidir.'); valid = false; }
 
     if (!valid) return;
@@ -559,7 +560,27 @@ const blogState = {
   isAdmin: false,
   password: '',
   view: 'listing',
+  loginAttempts: 0,
+  cooldownUntil: 0,
+  cooldownTimer: null,
 };
+
+// Secret admin URL: navigate to #blog-yonetim-paneli to access admin login
+const BLOG_ADMIN_HASH = '#blog-yonetim-paneli';
+
+function checkBlogAdminHash() {
+  if (window.location.hash === BLOG_ADMIN_HASH) {
+    // Clear the hash so it's not visible
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    // Scroll to blog section
+    const blogSection = document.getElementById('blog');
+    if (blogSection) blogSection.scrollIntoView({ behavior: 'smooth' });
+    // If not already admin, show login
+    if (!blogState.isAdmin) {
+      blogShowLogin();
+    }
+  }
+}
 
 function initBlog() {
   const saved = sessionStorage.getItem('blogAdmin');
@@ -567,6 +588,14 @@ function initBlog() {
     blogState.isAdmin = true;
     blogState.password = saved;
     updateAdminUI();
+  }
+
+  // Restore cooldown from sessionStorage
+  const cooldownData = sessionStorage.getItem('blogLoginCooldown');
+  if (cooldownData) {
+    const data = JSON.parse(cooldownData);
+    blogState.loginAttempts = data.attempts || 0;
+    blogState.cooldownUntil = data.until || 0;
   }
 
   initBlogToolbar();
@@ -610,6 +639,10 @@ function initBlog() {
   }
 
   fetchBlogPosts();
+
+  // Check if admin hash is present on load
+  checkBlogAdminHash();
+  window.addEventListener('hashchange', checkBlogAdminHash);
 }
 
 // ─── Blog: Fetch & Render ─────────────────────────────────────
@@ -741,19 +774,86 @@ window.blogShowLogin = function() {
   document.getElementById('blogLoginOverlay').style.display = 'flex';
   document.getElementById('blogLoginPassword').value = '';
   document.getElementById('blogLoginError').textContent = '';
+  updateCooldownUI();
   document.getElementById('blogLoginPassword').focus();
 };
 
 window.blogHideLogin = function() {
   document.getElementById('blogLoginOverlay').style.display = 'none';
+  if (blogState.cooldownTimer) {
+    clearInterval(blogState.cooldownTimer);
+    blogState.cooldownTimer = null;
+  }
 };
 
+function updateCooldownUI() {
+  const cooldownEl = document.getElementById('blogLoginCooldown');
+  const cooldownText = document.getElementById('blogLoginCooldownText');
+  const loginBtn = document.getElementById('blogLoginBtn');
+  const pwInput = document.getElementById('blogLoginPassword');
+  const now = Date.now();
+
+  if (blogState.cooldownUntil > now) {
+    const remaining = Math.ceil((blogState.cooldownUntil - now) / 1000);
+    cooldownEl.style.display = 'flex';
+    cooldownText.textContent = `Çok fazla hatalı deneme. ${remaining} saniye bekleyin.`;
+    loginBtn.disabled = true;
+    pwInput.disabled = true;
+    loginBtn.style.opacity = '0.5';
+
+    if (blogState.cooldownTimer) clearInterval(blogState.cooldownTimer);
+    blogState.cooldownTimer = setInterval(() => {
+      const rem = Math.ceil((blogState.cooldownUntil - Date.now()) / 1000);
+      if (rem <= 0) {
+        clearInterval(blogState.cooldownTimer);
+        blogState.cooldownTimer = null;
+        cooldownEl.style.display = 'none';
+        loginBtn.disabled = false;
+        pwInput.disabled = false;
+        loginBtn.style.opacity = '1';
+        pwInput.focus();
+      } else {
+        cooldownText.textContent = `Çok fazla hatalı deneme. ${rem} saniye bekleyin.`;
+      }
+    }, 1000);
+  } else {
+    cooldownEl.style.display = 'none';
+    loginBtn.disabled = false;
+    pwInput.disabled = false;
+    loginBtn.style.opacity = '1';
+  }
+}
+
+function startLoginCooldown() {
+  // Cooldown escalation: 3 attempts → 30s, 5 → 60s, 7+ → 120s
+  let cooldownSec = 30;
+  if (blogState.loginAttempts >= 7) cooldownSec = 120;
+  else if (blogState.loginAttempts >= 5) cooldownSec = 60;
+
+  blogState.cooldownUntil = Date.now() + cooldownSec * 1000;
+  sessionStorage.setItem('blogLoginCooldown', JSON.stringify({
+    attempts: blogState.loginAttempts,
+    until: blogState.cooldownUntil,
+  }));
+  updateCooldownUI();
+}
+
 window.blogLogin = function() {
+  // Check cooldown
+  if (blogState.cooldownUntil > Date.now()) {
+    updateCooldownUI();
+    return;
+  }
+
   const pw = document.getElementById('blogLoginPassword').value;
   if (!pw) {
     document.getElementById('blogLoginError').textContent = 'Şifre gerekli.';
     return;
   }
+
+  const loginBtn = document.getElementById('blogLoginBtn');
+  loginBtn.disabled = true;
+  loginBtn.style.opacity = '0.5';
 
   fetch(ENDPOINTS.blog, {
     method: 'POST',
@@ -762,18 +862,31 @@ window.blogLogin = function() {
   })
   .then(r => r.json())
   .then(data => {
+    loginBtn.disabled = false;
+    loginBtn.style.opacity = '1';
     if (data.success) {
       blogState.isAdmin = true;
       blogState.password = pw;
+      blogState.loginAttempts = 0;
+      blogState.cooldownUntil = 0;
       sessionStorage.setItem('blogAdmin', pw);
+      sessionStorage.removeItem('blogLoginCooldown');
       blogHideLogin();
       updateAdminUI();
       fetchBlogPosts();
     } else {
+      blogState.loginAttempts++;
       document.getElementById('blogLoginError').textContent = 'Şifre hatalı.';
+      document.getElementById('blogLoginPassword').value = '';
+      // Trigger cooldown after 3 failed attempts
+      if (blogState.loginAttempts >= 3) {
+        startLoginCooldown();
+      }
     }
   })
   .catch(() => {
+    loginBtn.disabled = false;
+    loginBtn.style.opacity = '1';
     document.getElementById('blogLoginError').textContent = 'Bağlantı hatası.';
   });
 };
@@ -788,9 +901,11 @@ function blogAdminLogout() {
 
 function updateAdminUI() {
   const btn = document.getElementById('blogAdminBtn');
-  if (!btn) return;
+  const actions = document.getElementById('blogHeaderActions');
+  if (!btn || !actions) return;
 
   if (blogState.isAdmin) {
+    actions.style.display = '';
     btn.textContent = '+ Yeni Yazı';
     btn.onclick = () => showBlogEditor();
     if (!document.getElementById('blogLogoutBtn')) {
@@ -803,8 +918,7 @@ function updateAdminUI() {
       btn.parentElement.appendChild(logoutBtn);
     }
   } else {
-    btn.textContent = 'Yönetim';
-    btn.onclick = blogShowLogin;
+    actions.style.display = 'none';
     const logoutBtn = document.getElementById('blogLogoutBtn');
     if (logoutBtn) logoutBtn.remove();
   }
@@ -1044,6 +1158,74 @@ function insertImageToEditor(file) {
       placeholder.textContent = 'Görsel yüklenemedi';
       placeholder.classList.add('blog-img-error');
     });
+}
+
+// ─── Blog: Audio Insert ──────────────────────────────────────
+function insertAudioToEditor(file) {
+  const editorContent = document.getElementById('blogEditorContent');
+  const placeholder = document.createElement('div');
+  placeholder.className = 'blog-audio-uploading';
+  placeholder.textContent = 'Ses dosyası yükleniyor...';
+
+  const sel = window.getSelection();
+  if (sel.rangeCount && editorContent.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(placeholder);
+  } else {
+    editorContent.appendChild(placeholder);
+  }
+
+  // Convert audio to base64 and upload to server
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const base64 = e.target.result.split(',')[1];
+    const mimeType = file.type || 'audio/mpeg';
+
+    fetch(ENDPOINTS.blog, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'upload', password: blogState.password,
+        imageData: base64, mimeType, fileName: file.name,
+      }),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        const audioWrap = document.createElement('div');
+        audioWrap.className = 'blog-audio-embed';
+        audioWrap.contentEditable = 'false';
+        audioWrap.innerHTML =
+          `<div class="blog-audio-player">` +
+          `<div class="blog-audio-icon">` +
+          `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>` +
+          `</div>` +
+          `<div class="blog-audio-info">` +
+          `<span class="blog-audio-name">${escapeHtml(file.name)}</span>` +
+          `<audio controls src="${data.url}" preload="metadata"></audio>` +
+          `</div>` +
+          `<button class="blog-audio-remove" title="Kaldır" onclick="this.closest('.blog-audio-embed').nextElementSibling||this.closest('.blog-audio-embed').parentNode.appendChild(document.createElement('p'));this.closest('.blog-audio-embed').remove()">` +
+          `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
+          `</button>` +
+          `</div>`;
+        placeholder.replaceWith(audioWrap);
+        if (!audioWrap.nextElementSibling) {
+          const p = document.createElement('p');
+          p.innerHTML = '<br>';
+          audioWrap.parentNode.insertBefore(p, audioWrap.nextSibling);
+        }
+      } else {
+        placeholder.textContent = 'Ses dosyası yüklenemedi';
+        placeholder.classList.add('blog-audio-error');
+      }
+    })
+    .catch(() => {
+      placeholder.textContent = 'Ses dosyası yüklenemedi';
+      placeholder.classList.add('blog-audio-error');
+    });
+  };
+  reader.readAsDataURL(file);
 }
 
 // ─── Blog: Word Count ────────────────────────────────────────
@@ -1304,6 +1486,11 @@ function initBlogToolbar() {
         input.type = 'file'; input.accept = 'image/*';
         input.onchange = () => { if (input.files[0]) insertImageToEditor(input.files[0]); };
         input.click();
+      } else if (type === 'audio') {
+        const input = document.createElement('input');
+        input.type = 'file'; input.accept = 'audio/*';
+        input.onchange = () => { if (input.files[0]) insertAudioToEditor(input.files[0]); };
+        input.click();
       } else if (type === 'video' || type === 'link') {
         saveCursorRange();
         const rect = editorContent.getBoundingClientRect();
@@ -1369,8 +1556,8 @@ function insertLinkCard(url) {
 
 // ─── Blog: HTML Sanitization ──────────────────────────────────
 function sanitizeBlogHtml(html) {
-  const allowed = ['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','A','H1','H2','H3','H4','BLOCKQUOTE','UL','OL','LI','IMG','FIGURE','FIGCAPTION','DIV','SPAN','IFRAME','PRE','CODE','HR','SVG','PATH','LINE','POLYLINE','CIRCLE','RECT','TEXT','BUTTON'];
-  const allowedAttrs = ['href','src','alt','class','target','rel','frameborder','allowfullscreen','data-placeholder','contenteditable','title','onclick','viewBox','width','height','fill','stroke','stroke-width','stroke-linecap','d','x1','y1','x2','y2','points','cx','cy','r','x','y','font-size','font-weight','font-family'];
+  const allowed = ['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','A','H1','H2','H3','H4','BLOCKQUOTE','UL','OL','LI','IMG','FIGURE','FIGCAPTION','DIV','SPAN','IFRAME','PRE','CODE','HR','SVG','PATH','LINE','POLYLINE','CIRCLE','RECT','TEXT','BUTTON','AUDIO'];
+  const allowedAttrs = ['href','src','alt','class','target','rel','frameborder','allowfullscreen','data-placeholder','contenteditable','title','onclick','viewBox','width','height','fill','stroke','stroke-width','stroke-linecap','d','x1','y1','x2','y2','points','cx','cy','r','x','y','font-size','font-weight','font-family','controls','preload'];
 
   const div = document.createElement('div');
   div.innerHTML = html;

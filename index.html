@@ -281,8 +281,8 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
       <div class="section-header fade-in" id="blogHeader">
         <h2 class="section-title section-tag">Blog</h2>
         <p class="section-subtitle">Topluluk yazıları ve haberler.</p>
-        <div class="blog-header-actions">
-          <button id="blogAdminBtn" class="btn btn-secondary btn-sm" onclick="blogShowLogin()">Yönetim</button>
+        <div class="blog-header-actions" id="blogHeaderActions" style="display:none;">
+          <button id="blogAdminBtn" class="btn btn-secondary btn-sm">+ Yeni Yazı</button>
         </div>
       </div>
 
@@ -443,6 +443,10 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
             <span>Bağlantı</span>
           </button>
+          <button class="blog-insert-option" data-insert="audio" title="Ses Kaydı Ekle">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <span>Ses Kaydı</span>
+          </button>
           <button class="blog-insert-option" data-insert="divider" title="Ayırıcı Ekle">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="12" x2="22" y2="12"/></svg>
             <span>Ayırıcı</span>
@@ -483,9 +487,13 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
           <div class="form-group">
             <input type="password" id="blogLoginPassword" placeholder="Şifre" onkeydown="if(event.key==='Enter')blogLogin()">
             <span id="blogLoginError" class="field-error"></span>
+            <div id="blogLoginCooldown" class="blog-login-cooldown" style="display:none;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span id="blogLoginCooldownText"></span>
+            </div>
           </div>
           <div class="blog-login-actions">
-            <button class="btn btn-primary" onclick="blogLogin()">Giriş</button>
+            <button class="btn btn-primary" id="blogLoginBtn" onclick="blogLogin()">Giriş</button>
             <button class="btn btn-secondary" onclick="blogHideLogin()">İptal</button>
           </div>
         </div>
@@ -544,7 +552,7 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
               <span class="field-error"></span>
             </div>
             <div class="form-group">
-              <label for="contact-email">E-posta *</label>
+              <label for="contact-email">ODTÜ E-posta *</label>
               <input type="email" id="contact-email" name="email" placeholder="isim.soyisim@metu.edu.tr" required />
               <span class="field-error"></span>
             </div>
