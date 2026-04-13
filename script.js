@@ -413,8 +413,8 @@ function submitForm(form, prefix, formId) {
     showFormSuccess(prefix, form);
   })
   .catch(() => {
-    // With no-cors, errors are opaque — still show success if request was sent
-    showFormSuccess(prefix, form);
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Başvuruyu Gönder'; }
+    alert('Başvuru gönderilemedi. Lütfen internet bağlantınızı kontrol edip tekrar deneyin.');
   });
 }
 
@@ -532,9 +532,8 @@ function initContactForm() {
       if (success) success.style.display = 'block';
     })
     .catch(() => {
-      form.style.display = 'none';
-      const success = document.getElementById('contact-success');
-      if (success) success.style.display = 'block';
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Gönder'; }
+      alert('Mesaj gönderilemedi. Lütfen internet bağlantınızı kontrol edip tekrar deneyin.');
     });
   });
 }
@@ -583,12 +582,8 @@ function checkBlogAdminHash() {
 }
 
 function initBlog() {
-  const saved = sessionStorage.getItem('blogAdmin');
-  if (saved) {
-    blogState.isAdmin = true;
-    blogState.password = saved;
-    updateAdminUI();
-  }
+  // Not: Oturum yenilendiğinde admin tekrar giriş yapmalıdır
+  // sessionStorage'da şifre saklanmaz, sadece oturum bayrağı tutulur
 
   // Restore cooldown from sessionStorage
   const cooldownData = sessionStorage.getItem('blogLoginCooldown');
@@ -651,12 +646,17 @@ function fetchBlogPosts() {
   const empty = document.getElementById('blogEmpty');
   const loading = document.getElementById('blogLoading');
 
-  let url = ENDPOINTS.blog + '?action=list';
+  const listPayload = { action: 'list' };
   if (blogState.isAdmin) {
-    url += '&admin=true&pw=' + encodeURIComponent(blogState.password);
+    listPayload.admin = true;
+    listPayload.password = blogState.password;
   }
 
-  fetch(url)
+  fetch(ENDPOINTS.blog, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(listPayload),
+  })
     .then(r => r.json())
     .then(data => {
       if (loading) loading.style.display = 'none';
@@ -689,12 +689,14 @@ function renderBlogListing() {
   grid.innerHTML = blogState.posts.map(post => {
     const date = post.createdAt ? new Date(post.createdAt).toLocaleDateString('tr-TR', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
     const isDraft = post.status === 'draft';
+    // ID'yi alfanumerik karakterlerle sınırla
+    const safeId = String(post.id).replace(/[^a-zA-Z0-9_-]/g, '');
     const coverHtml = post.coverImage
       ? `<img class="blog-card-image" src="${escapeAttr(post.coverImage)}" alt="${escapeAttr(post.title)}" loading="lazy">`
       : `<div class="blog-card-image-placeholder">Blog</div>`;
 
     return `
-      <div class="blog-card ${isDraft ? 'blog-card-draft' : ''}" onclick="showBlogPost('${escapeAttr(post.id)}')">
+      <div class="blog-card ${isDraft ? 'blog-card-draft' : ''}" onclick="showBlogPost('${safeId}')">
         ${coverHtml}
         <div class="blog-card-body">
           <div class="blog-card-category">${isDraft ? 'Taslak · ' : ''}${escapeHtml(post.category || 'Genel')}</div>
@@ -709,7 +711,14 @@ function renderBlogListing() {
 
 // ─── Blog: Post Detail ────────────────────────────────────────
 function showBlogPost(id) {
-  fetch(ENDPOINTS.blog + '?action=get&id=' + encodeURIComponent(id))
+  const payload = { action: 'get', id: id };
+  if (blogState.isAdmin) payload.password = blogState.password;
+
+  fetch(ENDPOINTS.blog, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  })
     .then(r => r.json())
     .then(data => {
       if (!data.success || !data.post) return;
@@ -743,7 +752,7 @@ function renderBlogDetail(post) {
   contentEl.innerHTML = sanitizeBlogHtml(post.content || '');
   contentEl.querySelectorAll('a').forEach(a => {
     a.setAttribute('target', '_blank');
-    a.setAttribute('rel', 'noopener');
+    a.setAttribute('rel', 'noopener noreferrer');
   });
 
   if (actionsEl) actionsEl.style.display = blogState.isAdmin ? 'flex' : 'none';
@@ -772,7 +781,7 @@ window.setBlogView = function(view) {
 };
 
 // ─── Blog: Admin Auth ─────────────────────────────────────────
-window.blogShowLogin = function() {
+function blogShowLogin() {
   if (blogState.isAdmin) {
     showBlogEditor();
     return;
@@ -875,7 +884,8 @@ window.blogLogin = function() {
       blogState.password = pw;
       blogState.loginAttempts = 0;
       blogState.cooldownUntil = 0;
-      sessionStorage.setItem('blogAdmin', pw);
+      // Şifreyi sessionStorage'da saklamak yerine oturum bayrağı kullan
+      sessionStorage.setItem('blogAdminSession', 'true');
       sessionStorage.removeItem('blogLoginCooldown');
       blogHideLogin();
       updateAdminUI();
@@ -900,7 +910,7 @@ window.blogLogin = function() {
 function blogAdminLogout() {
   blogState.isAdmin = false;
   blogState.password = '';
-  sessionStorage.removeItem('blogAdmin');
+  sessionStorage.removeItem('blogAdminSession');
   updateAdminUI();
   fetchBlogPosts();
 }
@@ -921,7 +931,7 @@ function updateAdminUI() {
       logoutBtn.textContent = 'Çıkış';
       logoutBtn.style.marginLeft = '8px';
       logoutBtn.onclick = blogAdminLogout;
-      btn.parentElement.appendChild(logoutBtn);
+      actions.appendChild(logoutBtn);
     }
   } else {
     actions.style.display = 'none';
@@ -947,7 +957,7 @@ function showBlogEditor(post) {
     categoryEl.value = post.category || 'Genel';
     authorEl.value = post.author || 'UGT';
     excerptEl.value = post.excerpt || '';
-    contentEl.innerHTML = post.content || '';
+    contentEl.innerHTML = sanitizeBlogHtml(post.content || '');
     if (post.coverImage) {
       coverPreview.innerHTML = `<img src="${escapeAttr(post.coverImage)}"><button class="blog-editor-cover-remove" onclick="event.stopPropagation();removeCoverImage()">✕</button>`;
       coverPreview.style.display = 'block';
@@ -1305,6 +1315,11 @@ function initBlogToolbar() {
   function applyLink() {
     const url = linkInput.value.trim();
     if (url) {
+      // Tehlikeli protokolleri engelle
+      if (/^\s*(javascript|data|vbscript)\s*:/i.test(url)) {
+        linkPopover.style.display = 'none';
+        return;
+      }
       restoreCursorRange();
       document.execCommand('createLink', false, url);
       // Make link open in new tab
@@ -1529,9 +1544,14 @@ function getParentBlock() {
 }
 
 function insertVideoEmbed(platform, id) {
+  // ID'yi strict şekilde doğrula — sadece alfanumerik, tire ve alt çizgi
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safeId) return;
+
   let src = '';
-  if (platform === 'youtube') src = `https://www.youtube.com/embed/${id}`;
-  else if (platform === 'vimeo') src = `https://player.vimeo.com/video/${id}`;
+  if (platform === 'youtube') src = `https://www.youtube.com/embed/${safeId}`;
+  else if (platform === 'vimeo') src = `https://player.vimeo.com/video/${safeId}`;
+  else return;
 
   document.execCommand('insertHTML', false,
     `<div class="blog-youtube-embed"><iframe src="${src}" frameborder="0" allowfullscreen></iframe></div><p><br></p>`);
@@ -1544,8 +1564,13 @@ function insertYoutubeEmbed(url) {
 }
 
 function insertLinkCard(url) {
+  // Tehlikeli protokolleri engelle
+  if (/^\s*(javascript|data|vbscript)\s*:/i.test(url)) return;
   try {
-    const hostname = new URL(url).hostname;
+    const parsed = new URL(url);
+    // Sadece http/https protokollerine izin ver
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+    const hostname = parsed.hostname;
     const html = `<div class="blog-link-card" contenteditable="false">` +
       `<div class="blog-link-card-body">` +
       `<div class="blog-link-card-title">${escapeHtml(url)}</div>` +
@@ -1554,14 +1579,16 @@ function insertLinkCard(url) {
       `<span>${escapeHtml(hostname)}</span></div></div></div><p><br></p>`;
     document.execCommand('insertHTML', false, html);
   } catch {
-    document.execCommand('createLink', false, url);
+    // Geçersiz URL — hiçbir şey yapma
   }
 }
 
 // ─── Blog: HTML Sanitization ──────────────────────────────────
 function sanitizeBlogHtml(html) {
-  const allowed = ['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','A','H1','H2','H3','H4','BLOCKQUOTE','UL','OL','LI','IMG','FIGURE','FIGCAPTION','DIV','SPAN','IFRAME','PRE','CODE','HR','SVG','PATH','LINE','POLYLINE','CIRCLE','RECT','TEXT','BUTTON','AUDIO'];
-  const allowedAttrs = ['href','src','alt','class','target','rel','frameborder','allowfullscreen','data-placeholder','contenteditable','title','onclick','viewBox','width','height','fill','stroke','stroke-width','stroke-linecap','d','x1','y1','x2','y2','points','cx','cy','r','x','y','font-size','font-weight','font-family','controls','preload'];
+  const allowed = ['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','A','H1','H2','H3','H4','BLOCKQUOTE','UL','OL','LI','IMG','FIGURE','FIGCAPTION','DIV','SPAN','IFRAME','PRE','CODE','HR','AUDIO'];
+  const allowedAttrs = ['href','src','alt','class','target','rel','frameborder','allowfullscreen','data-placeholder','title','width','height','controls','preload'];
+  // iframe src sadece güvenilir domainlerden yüklenebilir
+  const trustedIframeDomains = ['www.youtube.com', 'youtube.com', 'player.vimeo.com'];
 
   const div = document.createElement('div');
   div.innerHTML = html;
@@ -1573,11 +1600,29 @@ function sanitizeBlogHtml(html) {
           while (child.firstChild) node.insertBefore(child.firstChild, child);
           node.removeChild(child);
         } else {
+          // Tüm event handler attribute'larını temizle (onclick, onload, onerror vb.)
           for (const attr of Array.from(child.attributes)) {
-            if (!allowedAttrs.includes(attr.name)) child.removeAttribute(attr.name);
+            if (!allowedAttrs.includes(attr.name) || attr.name.startsWith('on')) {
+              child.removeAttribute(attr.name);
+            }
           }
-          if (child.hasAttribute('href') && child.getAttribute('href').toLowerCase().trim().startsWith('javascript')) child.removeAttribute('href');
-          if (child.hasAttribute('src') && child.getAttribute('src').toLowerCase().trim().startsWith('javascript')) child.removeAttribute('src');
+          // Tehlikeli protokolleri temizle (javascript:, data:, vbscript: ve boşluk/tab trikleri)
+          const dangerousUrl = (val) => /^\s*(javascript|data|vbscript)\s*:/i.test(val);
+          if (child.hasAttribute('href') && dangerousUrl(child.getAttribute('href'))) child.removeAttribute('href');
+          if (child.hasAttribute('src') && dangerousUrl(child.getAttribute('src'))) child.removeAttribute('src');
+          // iframe src'yi güvenilir domainlerle sınırla
+          if (child.tagName === 'IFRAME' && child.hasAttribute('src')) {
+            try {
+              const iframeHost = new URL(child.getAttribute('src')).hostname;
+              if (!trustedIframeDomains.includes(iframeHost)) {
+                node.removeChild(child);
+                continue;
+              }
+            } catch {
+              node.removeChild(child);
+              continue;
+            }
+          }
           cleanNode(child);
         }
       }

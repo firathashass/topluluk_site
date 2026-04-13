@@ -281,8 +281,8 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
       <div class="section-header fade-in" id="blogHeader">
         <h2 class="section-title section-tag">Blog</h2>
         <p class="section-subtitle">Topluluk yazıları ve haberler.</p>
-        <div class="blog-header-actions">
-          <button id="blogAdminBtn" class="btn btn-secondary btn-sm" onclick="blogShowLogin()">Yönetim</button>
+        <div id="blogHeaderActions" class="blog-header-actions" style="display:none;">
+          <button id="blogAdminBtn" class="btn btn-secondary btn-sm">+ Yeni Yazı</button>
         </div>
       </div>
 
@@ -480,12 +480,15 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
         <div class="blog-login-card">
           <h3>Blog Yönetimi</h3>
           <p>Yazı eklemek ve düzenlemek için giriş yapın.</p>
+          <div id="blogLoginCooldown" class="blog-login-cooldown" style="display:none;">
+            <span id="blogLoginCooldownText"></span>
+          </div>
           <div class="form-group">
-            <input type="password" id="blogLoginPassword" placeholder="Şifre" onkeydown="if(event.key==='Enter')blogLogin()">
+            <input type="password" id="blogLoginPassword" placeholder="Şifre" onkeydown="if(event.key==='Enter')blogLogin()" autocomplete="off">
             <span id="blogLoginError" class="field-error"></span>
           </div>
           <div class="blog-login-actions">
-            <button class="btn btn-primary" onclick="blogLogin()">Giriş</button>
+            <button id="blogLoginBtn" class="btn btn-primary" onclick="blogLogin()">Giriş</button>
             <button class="btn btn-secondary" onclick="blogHideLogin()">İptal</button>
           </div>
         </div>
@@ -589,7 +592,7 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
               </svg>
             </a>
-            <a href="mailto:ugt@metu.edu.tr " aria-label="E-posta">
+            <a href="mailto:ugt@metu.edu.tr" aria-label="E-posta">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
                 <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
                 <polyline points="22,6 12,13 2,6" />
@@ -619,7 +622,7 @@ Topluluğumuzun geleceğine dair beklentimiz ise aynı politik yapının ve kül
         <div class="footer-links">
           <h4>İletişim</h4>
           <ul>
-            <li><a href="mailto:ugt@metu.edu.tr ">ugt@metu.edu.tr </a></li>
+            <li><a href="mailto:ugt@metu.edu.tr">ugt@metu.edu.tr </a></li>
             <li><a href="https://www.instagram.com/ugt_odtu/" target="_blank" rel="noopener">@ugt_odtu</a></li>
           </ul>
         </div>

@@ -83,30 +83,18 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'list';
 
   if (action === 'list') {
+    // Liste artık POST ile alınıyor (şifre URL'de görünmesin diye)
+    // GET ile sadece yayınlanmış postlar döner
     var posts = getAllPosts();
-    // Sadece yayınlanmış postları döndür (admin değilse)
-    var showAll = e.parameter.admin === 'true' && e.parameter.pw === ADMIN_PASSWORD;
-    if (!showAll) {
-      posts = posts.filter(function(p) { return p.status === 'published'; });
-    }
-    // İçerik özetini döndür (listeleme için tam içerik gereksiz)
+    posts = posts.filter(function(p) { return p.status === 'published'; });
     posts = posts.map(function(p) {
       return {
-        id: p.id,
-        title: p.title,
-        excerpt: p.excerpt,
-        category: p.category,
-        coverImage: p.coverImage,
-        author: p.author,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-        status: p.status
+        id: p.id, title: p.title, excerpt: p.excerpt, category: p.category,
+        coverImage: p.coverImage, author: p.author, createdAt: p.createdAt,
+        updatedAt: p.updatedAt, status: p.status
       };
     });
-    // En yeni önce
-    posts.sort(function(a, b) {
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    });
+    posts.sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
     return jsonResponse({ success: true, posts: posts });
   }
 
@@ -115,6 +103,10 @@ function doGet(e) {
     var posts = getAllPosts();
     var post = posts.filter(function(p) { return p.id == id; })[0];
     if (!post) return jsonResponse({ success: false, error: 'Post bulunamadı' });
+    // Taslak yazılar sadece admin tarafından görüntülenebilir
+    if (post.status === 'draft') {
+      return jsonResponse({ success: false, error: 'Post bulunamadı' });
+    }
     return jsonResponse({ success: true, post: post });
   }
 
@@ -127,7 +119,36 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var action = data.action;
 
-    // Şifre kontrolü
+    // Şifre gerektirmeyen action'lar
+    if (action === 'list') {
+      var posts = getAllPosts();
+      var showAll = data.admin === true && data.password === ADMIN_PASSWORD;
+      if (!showAll) {
+        posts = posts.filter(function(p) { return p.status === 'published'; });
+      }
+      posts = posts.map(function(p) {
+        return {
+          id: p.id, title: p.title, excerpt: p.excerpt, category: p.category,
+          coverImage: p.coverImage, author: p.author, createdAt: p.createdAt,
+          updatedAt: p.updatedAt, status: p.status
+        };
+      });
+      posts.sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
+      return jsonResponse({ success: true, posts: posts });
+    }
+
+    // Tek post getirme (taslak yazılar için şifre gerekir)
+    if (action === 'get') {
+      var posts = getAllPosts();
+      var post = posts.filter(function(p) { return p.id == data.id; })[0];
+      if (!post) return jsonResponse({ success: false, error: 'Post bulunamadı' });
+      if (post.status === 'draft' && data.password !== ADMIN_PASSWORD) {
+        return jsonResponse({ success: false, error: 'Post bulunamadı' });
+      }
+      return jsonResponse({ success: true, post: post });
+    }
+
+    // Şifre kontrolü (admin action'lar için)
     if (data.password !== ADMIN_PASSWORD) {
       return jsonResponse({ success: false, error: 'Yetkisiz erişim' });
     }
@@ -150,7 +171,9 @@ function doPost(e) {
 
     return jsonResponse({ success: false, error: 'Geçersiz aksiyon' });
   } catch (err) {
-    return jsonResponse({ success: false, error: err.toString() });
+    // Hata detaylarını istemciye sızdırma
+    Logger.log('doPost error: ' + err.toString());
+    return jsonResponse({ success: false, error: 'Sunucu hatası oluştu' });
   }
 }
 
@@ -158,6 +181,8 @@ function createPost(data) {
   var sheet = getSheet();
   var id = generateId();
   var now = new Date().toISOString();
+  var validStatuses = ['draft', 'published'];
+  var status = validStatuses.indexOf(data.status) !== -1 ? data.status : 'draft';
 
   sheet.appendRow([
     id,
@@ -169,7 +194,7 @@ function createPost(data) {
     data.author || 'UGT',
     now,
     now,
-    data.status || 'draft'
+    status
   ]);
 
   return jsonResponse({ success: true, id: id });
@@ -191,7 +216,8 @@ function updatePost(data) {
   values[5] = data.coverImage !== undefined ? data.coverImage : values[5];
   values[6] = data.author !== undefined ? data.author : values[6];
   values[8] = now;
-  values[9] = data.status !== undefined ? data.status : values[9];
+  var validStatuses = ['draft', 'published'];
+  values[9] = (data.status !== undefined && validStatuses.indexOf(data.status) !== -1) ? data.status : values[9];
 
   range.setValues([values]);
   return jsonResponse({ success: true, id: data.id });
@@ -207,9 +233,24 @@ function deletePost(data) {
 }
 
 function uploadImage(data) {
+  // Dosya tipi kontrolü — sadece görseller ve ses dosyalarına izin ver
+  var allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm'];
+  var mimeType = data.mimeType || 'image/jpeg';
+  if (allowedTypes.indexOf(mimeType) === -1) {
+    return jsonResponse({ success: false, error: 'Geçersiz dosya tipi. Sadece JPEG, PNG, GIF, WebP ve ses dosyaları (MP3, WAV, OGG) desteklenir.' });
+  }
+
+  // Dosya boyutu kontrolü (base64 ≈ %33 büyük, 5MB limit → ~6.7MB base64)
+  if (!data.imageData || data.imageData.length > 7000000) {
+    return jsonResponse({ success: false, error: 'Dosya çok büyük. Maksimum 5MB.' });
+  }
+
+  // Dosya adından path traversal karakterlerini temizle
+  var fileName = (data.fileName || 'image.jpg').replace(/[^a-zA-Z0-9._-]/g, '_');
+
   var folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
   var decoded = Utilities.base64Decode(data.imageData);
-  var blob = Utilities.newBlob(decoded, data.mimeType || 'image/jpeg', data.fileName || 'image.jpg');
+  var blob = Utilities.newBlob(decoded, mimeType, fileName);
   var file = folder.createFile(blob);
   file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
 
