@@ -762,6 +762,12 @@ window.setBlogView = function(view) {
   if (editor) editor.style.display = view === 'editor' ? '' : 'none';
   if (header) header.style.display = view === 'listing' ? '' : 'none';
 
+  // Hide insert menu when leaving editor
+  if (view !== 'editor') {
+    const im = document.getElementById('blogInsertMenu');
+    if (im) im.style.display = 'none';
+  }
+
   window.scrollTo(0, 0);
 };
 
@@ -1443,9 +1449,7 @@ function initBlogToolbar() {
       block = block.parentNode;
     }
 
-    const isEmpty = block && block !== editorContent && (block.textContent.trim() === '' || block.innerHTML === '<br>');
-
-    if (isEmpty) {
+    if (block && block !== editorContent) {
       const rect = block.getBoundingClientRect();
       const wrapRect = editorContent.closest('.blog-editor-wrap').getBoundingClientRect();
       insertMenu.style.display = 'flex';
